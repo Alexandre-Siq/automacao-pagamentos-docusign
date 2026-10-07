@@ -10,6 +10,7 @@ if raiz_projeto not in sys.path:
 
 from src.modules.extrator_pdf import extrair_dados_pdf
 from src.modules.pdf_exporter import converter_excel_para_pdf
+from src.modules.pdf_processor import preparar_pdf_docusign
 from src.modules.sheet_manager import (
     limpar_valor,
     obter_regras_fornecedor,
@@ -86,17 +87,32 @@ def processar_fatura(caminho_pdf, pasta_templates, pasta_output, reservados=None
     pdf_gerado = None
     try:
         converter_excel_para_pdf(caminho_excel, caminho_pdf_saida)
+        if not os.path.exists(caminho_pdf_saida):
+            raise RuntimeError("A exportação terminou sem gerar o PDF da solicitação.")
         pdf_gerado = caminho_pdf_saida
     except Exception as e:
         erro_pdf = f"Falha ao exportar PDF: {e}"
 
+    docusign = None
+    erro_docusign = None
+    if pdf_gerado:
+        caminho_docusign = os.path.splitext(caminho_pdf_saida)[0] + "_docusign.pdf"
+        try:
+            # A fatura recebida vem antes; a solicitação fica por último, com a âncora.
+            preparar_pdf_docusign([caminho_pdf, pdf_gerado], caminho_docusign)
+            docusign = caminho_docusign
+        except Exception as e:
+            erro_docusign = f"Falha ao montar o PDF do DocuSign: {e}"
+
+    erros = [mensagem for mensagem in (erro_pdf, erro_docusign) if mensagem]
     return {
         "arquivo_origem": nome_arquivo,
-        "status": "PARCIAL" if erro_pdf else "SUCESSO",
+        "status": "SUCESSO" if pdf_gerado and docusign else "PARCIAL",
         "dados": dados_extraidos,
         "excel": caminho_excel,
         "pdf": pdf_gerado,
-        "erro": erro_pdf,
+        "docusign": docusign,
+        "erro": " ".join(erros) or None,
     }
 
 
@@ -148,12 +164,15 @@ def processar_lote_faturas(pasta_input="data/input", pasta_output="data/output",
             if resultado_item["status"] == "SUCESSO":
                 sucessos += 1
                 print(f"  ✅ Concluído! Fornecedor: {fornecedor} | Valor: {valor}")
-                print(f"     Excel: {resultado_item['excel']}")
-                print(f"     PDF:   {resultado_item['pdf']}\n")
+                print(f"     Excel:    {resultado_item['excel']}")
+                print(f"     PDF:      {resultado_item['pdf']}")
+                print(f"     DocuSign: {resultado_item['docusign']}\n")
             else:
                 parciais += 1
-                print(f"  ⚠️ Excel gerado, PDF pendente. Fornecedor: {fornecedor} | Valor: {valor}")
+                print(f"  ⚠️ Concluído com ressalva. Fornecedor: {fornecedor} | Valor: {valor}")
                 print(f"     Excel: {resultado_item['excel']}")
+                if resultado_item.get("pdf"):
+                    print(f"     PDF:   {resultado_item['pdf']}")
                 print(f"     {resultado_item['erro']}\n")
 
         except Exception as e:
@@ -165,6 +184,7 @@ def processar_lote_faturas(pasta_input="data/input", pasta_output="data/output",
                 "dados": None,
                 "excel": None,
                 "pdf": None,
+                "docusign": None,
                 "erro": str(e)
             })
 
@@ -178,7 +198,7 @@ def processar_lote_faturas(pasta_input="data/input", pasta_output="data/output",
     print("==================================================")
     print(f" Total de arquivos: {len(arquivos_pdf)}")
     print(f" Processados com sucesso: {sucessos}")
-    print(f" Excel sem PDF: {parciais}")
+    print(f" Concluídos com ressalva: {parciais}")
     print(f" Falhas: {falhas}")
     print(f" Relatório salvo em: {caminho_relatorio}")
     print("==================================================\n")

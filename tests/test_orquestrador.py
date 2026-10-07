@@ -14,9 +14,19 @@ from src.modules.batch_processor import processar_fatura, processar_lote_faturas
 from src.modules.pdf_exporter import converter_excel_para_pdf
 from src.modules.sheet_manager import obter_regras_fornecedor
 import openpyxl
+import pymupdf
 
 
 PASTA_TEMPLATES = os.path.join(ROOT, "data", "templates")
+
+
+def _simular_exportacao_pdf(_origem, destino):
+    documento = pymupdf.open()
+    pagina = documento.new_page()
+    pagina.insert_text((72, 72), "Solicitacao de pagamento")
+    documento.save(destino)
+    documento.close()
+    return destino
 
 
 def _fatura(fornecedor, valor="359,96", numero="160995206"):
@@ -67,7 +77,7 @@ class TestPlanilha(unittest.TestCase):
             pdf = os.path.join(saida, "claro.pdf")
             open(pdf, "wb").close()
             with patch("src.modules.batch_processor.extrair_dados_pdf", return_value=_fatura("CLARO")), \
-                 patch("src.modules.batch_processor.converter_excel_para_pdf", return_value="ok"):
+                 patch("src.modules.batch_processor.converter_excel_para_pdf", side_effect=_simular_exportacao_pdf):
                 resultado = processar_fatura(pdf, PASTA_TEMPLATES, saida)
 
             self.assertEqual(resultado["status"], "SUCESSO")
@@ -97,7 +107,7 @@ class TestPlanilha(unittest.TestCase):
             pdf = os.path.join(saida, "tasy.pdf")
             open(pdf, "wb").close()
             with patch("src.modules.batch_processor.extrair_dados_pdf", return_value=_fatura("TASY", "2186,34", "2286")), \
-                 patch("src.modules.batch_processor.converter_excel_para_pdf", return_value="ok"):
+                 patch("src.modules.batch_processor.converter_excel_para_pdf", side_effect=_simular_exportacao_pdf):
                 resultado = processar_fatura(pdf, PASTA_TEMPLATES, saida)
 
             wb = openpyxl.load_workbook(resultado["excel"])
@@ -121,7 +131,7 @@ class TestLote(unittest.TestCase):
                 return _fatura("VIVO", "263,17", "686186")
 
             with patch("src.modules.batch_processor.extrair_dados_pdf", side_effect=extrair), \
-                 patch("src.modules.batch_processor.converter_excel_para_pdf", return_value="ok"):
+                 patch("src.modules.batch_processor.converter_excel_para_pdf", side_effect=_simular_exportacao_pdf):
                 resultados = processar_lote_faturas(entrada, saida, PASTA_TEMPLATES)
 
             self.assertEqual([r["status"] for r in resultados], ["SUCESSO", "ERRO"])
@@ -156,7 +166,7 @@ class TestLote(unittest.TestCase):
                 open(os.path.join(entrada, nome), "wb").close()
 
             with patch("src.modules.batch_processor.extrair_dados_pdf", return_value=_fatura("PCTEC", "5171,89", "341")), \
-                 patch("src.modules.batch_processor.converter_excel_para_pdf", return_value="ok"):
+                 patch("src.modules.batch_processor.converter_excel_para_pdf", side_effect=_simular_exportacao_pdf):
                 resultados = processar_lote_faturas(entrada, saida, PASTA_TEMPLATES)
 
             excels = {os.path.basename(r["excel"]) for r in resultados}

@@ -135,13 +135,31 @@ class TestAnaliseLocal(unittest.TestCase):
             documento.save(caminho)
             documento.close()
 
-            with patch("src.modules.batch_processor.converter_excel_para_pdf", return_value="ok"):
+            def exportar(_origem, destino):
+                documento_saida = pymupdf.open()
+                pagina_saida = documento_saida.new_page()
+                pagina_saida.insert_text((72, 72), "Solicitacao de pagamento")
+                documento_saida.save(destino)
+                documento_saida.close()
+                return destino
+
+            with patch("src.modules.batch_processor.converter_excel_para_pdf", side_effect=exportar):
                 resultado = processar_fatura(caminho, PASTA_TEMPLATES, pasta)
 
             self.assertEqual(resultado["status"], "SUCESSO")
             self.assertEqual(resultado["dados"]["numero_nf"], "160995206")
             self.assertEqual(resultado["dados"]["valor_total"], "359,96")
             self.assertIn(os.path.join("CLARO", "fatura_NF_160995206.xlsx"), resultado["excel"])
+            self.assertTrue(os.path.exists(resultado["docusign"]))
+
+            original = pymupdf.open(caminho)
+            pacote = pymupdf.open(resultado["docusign"])
+            try:
+                self.assertEqual(pacote.page_count, original.page_count + 1)
+                self.assertIn("\\assinatura_dir_fin\\", pacote[-1].get_text())
+            finally:
+                original.close()
+                pacote.close()
 
     def test_pdf_sem_texto_nao_chama_servico_externo(self):
         with tempfile.TemporaryDirectory() as pasta:
