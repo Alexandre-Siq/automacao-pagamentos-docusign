@@ -8,7 +8,7 @@ raiz_projeto = os.path.abspath(os.path.join(diretorio_atual, "..", ".."))
 if raiz_projeto not in sys.path:
     sys.path.insert(0, raiz_projeto)
 
-from src.modules.gemini_extractor import extrair_dados_pdf
+from src.modules.extrator_pdf import extrair_dados_pdf
 from src.modules.pdf_exporter import converter_excel_para_pdf
 from src.modules.sheet_manager import (
     limpar_valor,
