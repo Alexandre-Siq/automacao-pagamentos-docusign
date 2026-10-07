@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pagamentos</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230c5c56'/%3E%3Cpath d='M8 10h16v2H8zm0 5h10v2H8zm0 5h16v2H8z' fill='%23f3efe6'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --papel: #f3efe6;
+      --tinta: #1b2430;
+      --suave: #5c6570;
+      --marca: #0c5c56;
+      --marca-escura: #08403c;
+      --cartao: #fffdf8;
+      --linha: #e4dacb;
+      --ok: #1c7a4d;
+      --ok-fundo: #e5f5ec;
+      --aviso: #8a5a10;
+      --aviso-fundo: #fff1d6;
+      --erro: #9d2c2c;
+      --erro-fundo: #fdeaea;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--tinta);
+      background:
+        radial-gradient(circle at top left, rgba(12, 92, 86, 0.08), transparent 32rem),
+        var(--papel);
+      font: 16px/1.45 "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 22px 7vw;
+      background: var(--marca-escura);
+      color: #f6f3ec;
+    }
+
+    header h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.7rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    header p { margin: 2px 0 0; color: #d5e4e1; font-size: 0.95rem; }
+
+    button, .link {
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .fantasma {
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      background: transparent;
+      color: #f6f3ec;
+      border-radius: 999px;
+      padding: 8px 14px;
+    }
+
+    .fantasma:hover { background: rgba(255, 255, 255, 0.08); }
+
+    main { width: min(880px, calc(100% - 32px)); margin: 28px auto 48px; }
+
+    .zona {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 230px;
+      padding: 28px;
+      text-align: center;
+      background: var(--cartao);
+      border: 2px dashed #c9bba6;
+      border-radius: 22px;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .zona.sobre, .zona:focus-within {
+      border-color: var(--marca);
+      background: #f4fbfa;
+    }
+
+    .zona strong { font-size: 1.25rem; }
+
+    .zona span { color: var(--suave); }
+
+    .escolher {
+      margin-top: 8px;
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 16px;
+      background: #efe7da;
+      color: var(--tinta);
+    }
+
+    .escolher:hover { background: #e7dccb; }
+
+    input[type="file"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    .lista { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+
+    .arquivo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 100%;
+      padding: 8px 10px 8px 12px;
+      background: var(--cartao);
+      border: 1px solid var(--linha);
+      border-radius: 999px;
+    }
+
+    .arquivo span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .arquivo button {
+      border: 0;
+      background: transparent;
+      color: var(--suave);
+      font-size: 1.1rem;
+      line-height: 1;
+    }
+
+    .acoes { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+    .principal {
+      border: 0;
+      border-radius: 14px;
+      padding: 14px 22px;
+      background: var(--marca);
+      color: white;
+      font-size: 1.05rem;
+      font-weight: 650;
+    }
+
+    .principal:hover:not(:disabled) { background: #0a4e49; }
+
+    .principal:disabled {
+      background: #cfc6b8;
+      color: #6f685e;
+      cursor: default;
+    }
+
+    .secundario {
+      border: 1px solid var(--linha);
+      border-radius: 14px;
+      padding: 13px 16px;
+      background: var(--cartao);
+      color: var(--tinta);
+    }
+
+    .aviso, .erro-geral {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+    }
+
+    .aviso { background: var(--aviso-fundo); color: var(--aviso); }
+    .erro-geral { background: var(--erro-fundo); color: var(--erro); }
+
+    .resumo {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 28px 0 14px;
+    }
+
+    .resumo div {
+      padding: 10px 14px;
+      background: var(--cartao);
+      border-radius: 12px;
+      border: 1px solid var(--linha);
+    }
+
+    .resumo strong { display: block; font-size: 1.3rem; }
+
+    .cartoes { display: grid; gap: 12px; }
+
+    article {
+      padding: 16px 18px;
+      background: var(--cartao);
+      border: 1px solid var(--linha);
+      border-radius: 18px;
+    }
+
+    article header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    article h2 { margin: 0; font-size: 1.15rem; }
+
+    article .origem { margin: 2px 0 0; color: var(--suave); font-size: 0.92rem; }
+
+    .valor { margin: 12px 0; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+
+    .selo {
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.85rem;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .SUCESSO { background: var(--ok-fundo); color: var(--ok); }
+    .PARCIAL { background: var(--aviso-fundo); color: var(--aviso); }
+    .ERRO { background: var(--erro-fundo); color: var(--erro); }
+
+    .atalhos { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .atalhos a {
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: var(--marca);
+      color: white;
+      text-decoration: none;
+    }
+
+    .atalhos a.claro { background: #efe7da; color: var(--tinta); }
+
+    .falha { margin: 8px 0 0; color: var(--erro); }
+
+    footer { margin-top: 28px; color: var(--suave); font-size: 0.92rem; }
+
+    .oculto { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Pagamentos</h1>
+      <p>Solte as faturas e gere a solicitação</p>
+    </div>
+    <button class="fantasma" id="encerrar" type="button">Encerrar</button>
+  </header>
+  <main>
+    <form id="formulario">
+      <label class="zona" id="zona" for="arquivos">
+        <strong>Solte os PDFs aqui</strong>
+        <span>Nota, boleto ou fatura. Pode ser mais de um.</span>
+        <span class="escolher">Escolher arquivos</span>
+      </label>
+      <input id="arquivos" type="file" accept="application/pdf,.pdf" multiple>
+      <div class="lista" id="lista"></div>
+      <div class="acoes">
+        <button class="principal" id="processar" type="submit" disabled>Processar</button>
+        <button class="secundario" id="abrir-pasta" type="button">Abrir pasta de saída</button>
+      </div>
+    </form>
+    <p class="aviso oculto" id="andamento">Lendo as faturas e montando os arquivos…</p>
+    <p class="erro-geral oculto" id="erro"></p>
+    <section id="resultado"></section>
+    <footer>Os arquivos ficam em data/output, cada fornecedor na sua pasta. Para abrir esta tela de novo, dê dois cliques em Abrir Pagamentos.bat.</footer>
+  </main>
+  <script>
+    const entrada = document.getElementById("arquivos");
+    const zona = document.getElementById("zona");
+    const lista = document.getElementById("lista");
+    const botao = document.getElementById("processar");
+    const erro = document.getElementById("erro");
+    const andamento = document.getElementById("andamento");
+    const resultado = document.getElementById("resultado");
+    let arquivos = [];
+
+    function adicionar(novos) {
+      for (const arquivo of novos) {
+        if (!arquivo.name.toLowerCase().endsWith(".pdf")) continue;
+        const repetido = arquivos.some((item) => item.name === arquivo.name && item.size === arquivo.size);
+        if (!repetido) arquivos.push(arquivo);
+      }
+      desenhar();
+    }
+
+    function desenhar() {
+      lista.replaceChildren();
+      arquivos.forEach((arquivo, indice) => {
+        const item = document.createElement("div");
+        item.className = "arquivo";
+        const nome = document.createElement("span");
+        nome.textContent = arquivo.name;
+        const remover = document.createElement("button");
+        remover.type = "button";
+        remover.textContent = "×";
+        remover.setAttribute("aria-label", "Remover " + arquivo.name);
+        remover.addEventListener("click", () => {
+          arquivos.splice(indice, 1);
+          desenhar();
+        });
+        item.append(nome, remover);
+        lista.append(item);
+      });
+      botao.disabled = arquivos.length === 0;
+    }
+
+    zona.addEventListener("dragover", (evento) => {
+      evento.preventDefault();
+      zona.classList.add("sobre");
+    });
+    zona.addEventListener("dragleave", () => zona.classList.remove("sobre"));
+    zona.addEventListener("drop", (evento) => {
+      evento.preventDefault();
+      zona.classList.remove("sobre");
+      adicionar(evento.dataTransfer.files);
+    });
+    entrada.addEventListener("change", () => {
+      adicionar(entrada.files);
+      entrada.value = "";
+    });
+
+    document.getElementById("formulario").addEventListener("submit", async (evento) => {
+      evento.preventDefault();
+      if (!arquivos.length) return;
+      erro.classList.add("oculto");
+      andamento.classList.remove("oculto");
+      botao.disabled = true;
+      const dados = new FormData();
+      arquivos.forEach((arquivo) => dados.append("faturas", arquivo));
+      try {
+        const resposta = await fetch("/processar", { method: "POST", body: dados });
+        const corpo = await resposta.json();
+        if (!resposta.ok) throw new Error(corpo.erro || "Não foi possível processar.");
+        mostrar(corpo);
+        arquivos = [];
+        desenhar();
+      } catch (falha) {
+        erro.textContent = falha.message;
+        erro.classList.remove("oculto");
+        botao.disabled = arquivos.length === 0;
+      } finally {
+        andamento.classList.add("oculto");
+      }
+    });
+
+    function mostrar(corpo) {
+      const resumo = document.createElement("div");
+      resumo.className = "resumo";
+      [
+        ["Total", corpo.resumo.total],
+        ["Concluídas", corpo.resumo.sucessos],
+        ["Com ressalva", corpo.resumo.parciais],
+        ["Falhas", corpo.resumo.falhas],
+      ].forEach(([rotulo, valor]) => {
+        const bloco = document.createElement("div");
+        const forte = document.createElement("strong");
+        forte.textContent = valor;
+        bloco.append(forte, document.createTextNode(rotulo));
+        resumo.append(bloco);
+      });
+
+      const cartoes = document.createElement("div");
+      cartoes.className = "cartoes";
+      corpo.itens.forEach((item) => cartoes.append(cartao(item)));
+      resultado.replaceChildren(resumo, cartoes);
+    }
+
+    function cartao(item) {
+      const artigo = document.createElement("article");
+      const topo = document.createElement("header");
+      const textos = document.createElement("div");
+      const titulo = document.createElement("h2");
+      titulo.textContent = item.fornecedor;
+      const origem = document.createElement("p");
+      origem.className = "origem";
+      origem.textContent = item.numero_nf ? item.arquivo + " · NF " + item.numero_nf : item.arquivo;
+      textos.append(titulo, origem);
+      const selo = document.createElement("span");
+      selo.className = "selo " + item.status;
+      selo.textContent = { SUCESSO: "Concluído", PARCIAL: "Com ressalva", ERRO: "Falhou" }[item.status] || item.status;
+      topo.append(textos, selo);
+
+      const valor = document.createElement("p");
+      valor.className = "valor";
+      valor.textContent = item.valor ? (String(item.valor).includes("R$") ? item.valor : "R$ " + item.valor) : "Valor não identificado";
+
+      const atalhos = document.createElement("div");
+      atalhos.className = "atalhos";
+      [
+        [item.excel, "Excel", true],
+        [item.pdf, "Solicitação", false],
+        [item.docusign, "DocuSign", false],
+      ].forEach(([href, rotulo, download]) => {
+        if (!href) return;
+        const link = document.createElement("a");
+        link.href = href;
+        link.textContent = rotulo;
+        if (download) link.setAttribute("download", "");
+        else link.target = "_blank";
+        if (rotulo !== "DocuSign") link.className = "claro";
+        atalhos.append(link);
+      });
+
+      artigo.append(topo, valor);
+      if (atalhos.childElementCount) artigo.append(atalhos);
+      if (item.erro) {
+        const falha = document.createElement("p");
+        falha.className = "falha";
+        falha.textContent = item.erro;
+        artigo.append(falha);
+      }
+      return artigo;
+    }
+
+    document.getElementById("abrir-pasta").addEventListener("click", async () => {
+      const resposta = await fetch("/abrir-pasta", { method: "POST" });
+      if (!resposta.ok) {
+        const corpo = await resposta.json();
+        erro.textContent = corpo.erro || "Não foi possível abrir a pasta.";
+        erro.classList.remove("oculto");
+      }
+    });
+
+    document.getElementById("encerrar").addEventListener("click", async () => {
+      if (!confirm("Encerrar o programa?")) return;
+      await fetch("/encerrar", { method: "POST" });
+      document.body.innerHTML = "<main><h1>Pode fechar esta aba.</h1></main>";
+    });
+  </script>
+</body>
+</html>
