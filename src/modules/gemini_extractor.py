@@ -16,7 +16,14 @@ if raiz_projeto not in sys.path:
 warnings.filterwarnings("ignore")
 
 load_dotenv()
-client = genai.Client()
+_client = None
+
+def _obter_cliente():
+    """Cria o cliente só na hora da chamada, para um erro de chave não derrubar o lote inteiro."""
+    global _client
+    if _client is None:
+        _client = genai.Client()
+    return _client
 
 def extrair_texto_pdf_local(caminho_pdf):
     """Extrai o texto do PDF em milissegundos localmente para evitar a fila do servidor."""
@@ -69,7 +76,7 @@ def extrair_dados_pdf(caminho_pdf):
         for modelo in modelos:
             for tentativa in range(1, 4):
                 try:
-                    res = client.models.generate_content(
+                    res = _obter_cliente().models.generate_content(
                         model=modelo,
                         contents=conteudo,
                         config=types.GenerateContentConfig(response_mime_type="application/json")
@@ -86,13 +93,13 @@ def extrair_dados_pdf(caminho_pdf):
 
     # 2. Estratégia Alternativa: Upload do PDF (Para faturas escaneadas/imagem)
     print("-> PDF em formato imagem/escaneado. Realizando upload do arquivo...")
-    documento = client.files.upload(file=caminho_pdf)
+    documento = _obter_cliente().files.upload(file=caminho_pdf)
     
     for modelo in modelos:
         for tentativa in range(1, 4):
             try:
                 print(f"Analisando via {modelo} (Tentativa {tentativa}/3)...")
-                res = client.models.generate_content(
+                res = _obter_cliente().models.generate_content(
                     model=modelo,
                     contents=[documento, prompt_instrucao],
                     config=types.GenerateContentConfig(response_mime_type="application/json")

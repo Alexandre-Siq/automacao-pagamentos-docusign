@@ -1,9 +1,17 @@
 import os
+import re
 import json
 from copy import copy
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font
+
+def sanitizar_nome(texto):
+    """Remove caracteres inválidos para nomes de pastas e arquivos."""
+    if not texto:
+        return "OUTROS"
+    texto_limpo = re.sub(r'[\\/*?:"<>|]', "", str(texto)).strip()
+    return texto_limpo if texto_limpo else "OUTROS"
 
 def formatar_moeda(valor_float):
     """Garante que a Capa tem o visual bonito da moeda brasileira"""
@@ -21,11 +29,13 @@ def obter_regras_fornecedor(nome_fornecedor, valor_float):
         "contrato_vigente": "sim",
         "tem_rateio": False,
         "template_file": "Template_PADRAO.xlsx",
-        "rateio_coords": {}
+        "rateio_coords": {},
+        "pasta": sanitizar_nome(nome_fornecedor)
     }
     
     if "CLARO" in nome_upper:
         regra["nome_oficial"] = "Claro S/A"
+        regra["pasta"] = "CLARO"
         regra["tem_rateio"] = True
         regra["rateio_coords"] = {
             "fornecedor": "B6", "nf": "B7", "emissao": "F7", 
@@ -40,6 +50,7 @@ def obter_regras_fornecedor(nome_fornecedor, valor_float):
             
     elif "VIVO" in nome_upper or "TELEFÔNICA" in nome_upper or "TELEFONICA" in nome_upper:
         regra["nome_oficial"] = "Telefônica Brasil S.A."
+        regra["pasta"] = "VIVO"
         regra["descricao"] = "Conta telefônica do terminal 13 3228-3000."
         regra["valor_igual"] = ""
         regra["contrato_vigente"] = ""
@@ -52,6 +63,7 @@ def obter_regras_fornecedor(nome_fornecedor, valor_float):
         
     elif "INFOCOPPY" in nome_upper or "SOUZA" in nome_upper or "SANTANA" in nome_upper:
         regra["nome_oficial"] = "Souza & Santana Suprimentos e Soluções Técnicas Ltda – ME"
+        regra["pasta"] = "INFOCOPPY"
         regra["descricao"] = "48 Impressoras/ Multifuncionais Brother, 5 Impressoras Coloridas Epson, 31 Impressoras Zebras, 10 Multifuncionais Lexmark, 1 Multifuncional Elgin, 2 Scanners Espon/Avision."
         regra["contrato"] = "S052/2022"
         regra["contrato_vigente"] = "nao"
@@ -64,6 +76,7 @@ def obter_regras_fornecedor(nome_fornecedor, valor_float):
         
     elif "PCTEC" in nome_upper:
         regra["nome_oficial"] = "PCTEC OUTSOURCING LTDA"
+        regra["pasta"] = "PCTEC"
         regra["descricao"] = "Locação de notebooks"
         regra["boleto"] = "nao"
         regra["valor_igual"] = ""
@@ -77,12 +90,14 @@ def obter_regras_fornecedor(nome_fornecedor, valor_float):
 
     elif "WTT" in nome_upper:
         regra["nome_oficial"] = "WTT TECNOLOGIA E CONSULTORIA"
+        regra["pasta"] = "WTT"
         regra["descricao"] = "Licença de uso, suporte e manutenção do software D-Server, WTT Print e CAP to PACS."
         regra["contrato"] = "S059/2022"
         regra["contrato_vigente"] = "nao"
         
     elif "TASY" in nome_upper or "TUCANO" in nome_upper:
         regra["nome_oficial"] = "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA"
+        regra["pasta"] = "TASY"
         regra["descricao"] = "Licença de uso, suporte e manutenção do software Tasy."
         
     return regra
