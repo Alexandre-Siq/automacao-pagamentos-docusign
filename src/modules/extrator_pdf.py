@@ -15,14 +15,15 @@ CAMPOS = (
 )
 
 # Nomes oficiais já reconhecidos pelas regras da planilha.
+# O fim do nome não exige fronteira: a leitura da imagem às vezes cola as palavras.
 FORNECEDORES = (
-    (r"\bINFOCOPPY\b", "INFOCOPPY"),
+    (r"\bINFOCOPPY", "INFOCOPPY"),
     (r"SOUZA\s*(?:&|E)\s*SANTANA", "Souza & Santana Suprimentos e Soluções Técnicas Ltda – ME"),
-    (r"\bPCTEC\b", "PCTEC OUTSOURCING LTDA"),
-    (r"\bWTT\b", "WTT TECNOLOGIA E CONSULTORIA"),
-    (r"\bTASY\b|\bTUCANO\b", "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA"),
-    (r"\bTELEFONICA\b|\bVIVO\b", "Telefônica Brasil S.A."),
-    (r"\bCLARO\b", "Claro S/A"),
+    (r"\bPCTEC", "PCTEC OUTSOURCING LTDA"),
+    (r"\bWTT", "WTT TECNOLOGIA E CONSULTORIA"),
+    (r"\bTASY|\bTUCANO", "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA"),
+    (r"\bTELEFONICA|\bVIVO", "Telefônica Brasil S.A."),
+    (r"\bCLARO", "Claro S/A"),
 )
 
 # Raiz do CNPJ (8 primeiros dígitos) quando o nome vem só como logotipo.
@@ -31,33 +32,34 @@ RAIZES_CNPJ = {
     "02558157": "Telefônica Brasil S.A.",
 }
 
+# \s* também cobre o texto da imagem, em que o OCR cola "VALORTOTAL".
 ROTULOS_VALOR = (
-    r"VALOR\s+DO\s+DOCUMENTO",
-    r"VALOR\s+COBRADO",
-    r"TOTAL\s+A\s+PAGAR",
-    r"VALOR\s+TOTAL\s+DA\s+NOTA",
-    r"VALOR\s+TOTAL\s+DO\s+SERVICO",
-    r"VALOR\s+TOTAL\s+DOS\s+SERVICOS",
-    r"VALOR\s+TOTAL\s+DA\s+NFS-?E",
-    r"VALOR\s+TOTAL\s+DA\s+FATURA",
-    r"VALOR\s+LIQUIDO\s+DA\s+NOTA",
-    r"VALOR\s+LIQUIDO",
-    r"VALOR\s+DOS\s+SERVICOS",
-    r"VALOR\s+TOTAL",
+    r"VALOR\s*DO\s*DOCUMENTO",
+    r"VALOR\s*COBRADO",
+    r"TOTAL\s*A\s*PAGAR",
+    r"VALOR\s*TOTAL\s*DA\s*NOTA",
+    r"VALOR\s*TOTAL\s*DO\s*SERVICO",
+    r"VALOR\s*TOTAL\s*DOS\s*SERVICOS",
+    r"VALOR\s*TOTAL\s*DA\s*NFS-?E",
+    r"VALOR\s*TOTAL\s*DA\s*FATURA",
+    r"VALOR\s*LIQUIDO\s*DA\s*NOTA",
+    r"VALOR\s*LIQUIDO",
+    r"VALOR\s*DOS\s*SERVICOS",
+    r"VALOR\s*TOTAL",
 )
 
 ROTULOS_NUMERO = (
-    r"NUMERO\s+DA\s+NOTA(?:\s+FISCAL)?",
-    r"NUMERO\s+DA\s+NFS-?E",
-    r"NUMERO\s+DA\s+NF-?E",
-    r"NUMERO\s+DA\s+FATURA",
-    r"N(?:O|\.)?\s+DA\s+NOTA(?:\s+FISCAL)?",
-    r"N(?:O|\.)?\s+DA\s+FATURA",
-    r"N(?:O|\.)?\s+FATURA",
-    r"NFS-?E\s+N(?:O|\.)?",
-    r"NF-?E\s+N(?:O|\.)?",
-    r"NOTA\s+FISCAL\s+N(?:O|\.)?",
-    r"FATURA\s+N(?:O|\.)?",
+    r"NUMERO\s*DA\s*NOTA(?:\s*FISCAL)?",
+    r"NUMERO\s*DA\s*NFS-?E",
+    r"NUMERO\s*DA\s*NF-?E",
+    r"NUMERO\s*DA\s*FATURA",
+    r"N(?:O|\.)?\s*DA\s*NOTA(?:\s*FISCAL)?",
+    r"N(?:O|\.)?\s*DA\s*FATURA",
+    r"N(?:O|\.)?\s*FATURA",
+    r"NFS-?E\s*N(?:O|\.)?",
+    r"NF-?E\s*N(?:O|\.)?",
+    r"NOTA\s*FISCAL\s*N(?:O|\.)?",
+    r"FATURA\s*N(?:O|\.)?",
 )
 
 CNPJ_RE = re.compile(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}")
@@ -77,7 +79,7 @@ LINHA_ARRECADACAO_RE = re.compile(
 
 
 def extrair_texto_pdf_local(caminho_pdf):
-    """Lê a camada de texto do PDF. Sem texto, o arquivo é imagem e não entra na fila de API."""
+    """Lê a camada de texto do PDF. Sem texto, a imagem da página é lida em seguida."""
     textos = []
     for leitor in (_texto_pypdf, _texto_pymupdf):
         try:
@@ -91,13 +93,18 @@ def extrair_texto_pdf_local(caminho_pdf):
     return max(textos, key=len)
 
 
+def _tem_dados_minimos(dados):
+    return bool(dados.get("fornecedor_nome") and dados.get("valor_total"))
+
+
 def extrair_dados_pdf(caminho_pdf):
     """Lê a fatura no próprio Python e devolve o JSON usado pela planilha."""
     if not os.path.exists(caminho_pdf):
         raise FileNotFoundError(f"Ficheiro PDF não encontrado em: {caminho_pdf}")
 
-    print("-> Lendo a fatura localmente, sem enviar ao Gemini...")
+    print("-> Lendo a fatura localmente...")
     candidatos = []
+    textos = []
     for leitor in (_texto_pypdf, _texto_pymupdf):
         try:
             texto = leitor(caminho_pdf)
@@ -105,21 +112,32 @@ def extrair_dados_pdf(caminho_pdf):
             texto = None
         if not texto or not texto.strip():
             continue
-        dados = analisar_texto_fatura(texto)
-        candidatos.append(dados)
+        textos.append(texto.strip())
+        candidatos.append(analisar_texto_fatura(texto))
+
+    # Nota escaneada, como a NF da Tasy salva só com a imagem da página.
+    if not any(_tem_dados_minimos(dados) for dados in candidatos):
+        texto_ocr = _texto_ocr(caminho_pdf)
+        if texto_ocr and texto_ocr.strip():
+            print("-> PDF sem texto selecionável. Lendo a imagem da nota...")
+            textos.append(texto_ocr.strip())
+            candidatos.append(analisar_texto_fatura(texto_ocr))
 
     if not candidatos:
         raise ValueError(
-            "O PDF não tem texto selecionável. A leitura local não envia o arquivo ao Gemini."
+            "O PDF não tem texto selecionável e a leitura da imagem não encontrou letras."
         )
 
-    dados = max(candidatos, key=_pontuacao)
-    if not dados.get("fornecedor_nome") or not dados.get("valor_total"):
+    melhor = max(range(len(candidatos)), key=lambda indice: _pontuacao(candidatos[indice]))
+    dados = candidatos[melhor]
+    if not _tem_dados_minimos(dados):
+        trecho = re.sub(r"\s+", " ", textos[melhor]).strip()[:180]
         raise ValueError(
             "Não foi possível identificar o fornecedor e o valor no texto do PDF. "
             f"Encontrado: fornecedor={dados.get('fornecedor_nome') or '—'}, "
             f"valor={dados.get('valor_total') or '—'}, "
-            f"nf={dados.get('numero_nf') or '—'}."
+            f"nf={dados.get('numero_nf') or '—'}. "
+            f"Trecho lido: {trecho}"
         )
     return json.dumps(dados, ensure_ascii=False)
 
@@ -133,8 +151,8 @@ def analisar_texto_fatura(texto):
     dados = {
         "cnpj_emissor": cnpj,
         "valor_total": _extrair_valor(plano) or _valor_da_linha(linha),
-        "data_vencimento": _extrair_data(plano, (r"DATA\s+DE\s+VENCIMENTO", r"\bVENCIMENTO\b", r"\bVENCTO\b")),
-        "data_emissao": _extrair_data(plano, (r"DATA\s+(?:E\s+HORA\s+)?DE\s+EMISSAO", r"\bEMISSAO\b")),
+        "data_vencimento": _extrair_data(plano, (r"DATA\s*DE\s*VENCIMENTO", r"\bVENCIMENTO", r"\bVENCTO")),
+        "data_emissao": _extrair_data(plano, (r"DATA\s*(?:E\s*HORA\s*)?DE\s*EMISSA[O0]", r"\bEMISSA[O0]")),
         "fornecedor_nome": _extrair_fornecedor(busca, cnpj),
         "numero_nf": _extrair_numero(plano),
         "linha_digitavel": linha,
@@ -185,9 +203,63 @@ def _texto_pymupdf(caminho_pdf):
 
     documento = pymupdf.open(caminho_pdf)
     try:
-        return "\n".join(pagina.get_text("text") for pagina in documento)
+        return "\n".join(pagina.get_text("text", sort=True) for pagina in documento)
     finally:
         documento.close()
+
+
+_MOTOR_OCR = None
+
+
+def _motor_ocr():
+    global _MOTOR_OCR
+    if _MOTOR_OCR is None:
+        from rapidocr_onnxruntime import RapidOCR
+
+        _MOTOR_OCR = RapidOCR()
+    return _MOTOR_OCR
+
+
+def _preparar_texto_ocr(texto):
+    """Separa letras e números que o OCR devolveu colados e corrige Emissão."""
+    texto = re.sub(r"EMISSA0(?=\d)", "EMISSAO ", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"(?<=[A-Za-zÀ-ÿ])(?=\d)", " ", texto)
+    texto = re.sub(r"(?<=\d)(?=[A-Za-zÀ-ÿ])", " ", texto)
+    return texto
+
+
+def _texto_ocr(caminho_pdf):
+    """Lê as páginas que são só imagem. Não envia o arquivo para fora da máquina."""
+    try:
+        import numpy as np
+        import pymupdf
+        motor = _motor_ocr()
+    except ImportError as erro:
+        raise ValueError(
+            "O PDF não tem texto selecionável. Para ler a imagem, atualize as dependências "
+            "com: pip install -r requirements.txt"
+        ) from erro
+    documento = pymupdf.open(caminho_pdf)
+    linhas = []
+    try:
+        for pagina in documento[:3]:
+            pixmap = pagina.get_pixmap(matrix=pymupdf.Matrix(3, 3), alpha=False)
+            if pixmap.n != 3:
+                pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
+            imagem = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+                pixmap.height, pixmap.width, pixmap.n
+            )
+            resultado, _tempo = motor(imagem)
+            if not resultado:
+                continue
+            for _caixa, texto, confianca in resultado:
+                if texto and confianca >= 0.5:
+                    linhas.append(texto)
+    finally:
+        documento.close()
+    if not linhas:
+        return None
+    return _preparar_texto_ocr("\n".join(linhas))
 
 
 def _formatar_cnpj(bruto):
@@ -281,7 +353,24 @@ def _extrair_valor(plano):
                 ultimo = valor
         if ultimo:
             return ultimo
-    return None
+    return _maior_valor(plano)
+
+
+def _centavos(valor):
+    inteiro, decimal = valor.replace(".", "").split(",")
+    return int(inteiro) * 100 + int(decimal)
+
+
+def _maior_valor(plano):
+    """Usa o maior valor quando o rótulo sumiu na imagem lida pelo OCR."""
+    valores = []
+    for encontrado in DINHEIRO_RE.finditer(plano):
+        formatado = _formatar_valor(encontrado.group(1) or encontrado.group(2))
+        if formatado and formatado != "0,00":
+            valores.append(formatado)
+    if not valores:
+        return None
+    return max(valores, key=_centavos)
 
 
 def _extrair_linha_digitavel(plano):

@@ -161,7 +161,7 @@ class TestAnaliseLocal(unittest.TestCase):
                 original.close()
                 pacote.close()
 
-    def test_pdf_sem_texto_nao_chama_servico_externo(self):
+    def test_pdf_em_branco_nao_chama_servico_externo(self):
         with tempfile.TemporaryDirectory() as pasta:
             caminho = os.path.join(pasta, "scan.pdf")
             documento = pymupdf.open()
@@ -171,6 +171,43 @@ class TestAnaliseLocal(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 extrair_dados_pdf(caminho)
             self.assertIn("não tem texto", str(ctx.exception))
+
+    def test_pdf_so_com_imagem_le_a_nota_da_tasy(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "NF tasy.pdf")
+            desenhada = pymupdf.open()
+            pagina = desenhada.new_page()
+            y = 80
+            for linha in (
+                "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA",
+                "Numero da NFS-e 2286",
+                "Emissao 01/08/2026",
+                "Vencimento 10/09/2026",
+                "Valor dos servicos R$ 2.186,34",
+            ):
+                pagina.insert_text((72, y), linha, fontsize=14)
+                y += 32
+            imagem = pagina.get_pixmap(matrix=pymupdf.Matrix(3, 3), alpha=False)
+            desenhada.close()
+
+            documento = pymupdf.open()
+            pagina_imagem = documento.new_page()
+            pagina_imagem.insert_image(pagina_imagem.rect, pixmap=imagem)
+            documento.save(caminho)
+            documento.close()
+
+            conferido = pymupdf.open(caminho)
+            try:
+                self.assertEqual(conferido[0].get_text().strip(), "")
+            finally:
+                conferido.close()
+
+            dados = json.loads(extrair_dados_pdf(caminho))
+            self.assertEqual(dados["fornecedor_nome"], "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA")
+            self.assertEqual(dados["numero_nf"], "2286")
+            self.assertEqual(dados["valor_total"], "2.186,34")
+            self.assertEqual(dados["data_emissao"], "01/08/2026")
+            self.assertEqual(dados["data_vencimento"], "10/09/2026")
 
     def test_texto_incompleto_explica_o_que_faltou(self):
         with tempfile.TemporaryDirectory() as pasta:
