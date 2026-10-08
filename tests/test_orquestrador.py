@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -89,18 +90,26 @@ class TestPlanilha(unittest.TestCase):
             self.assertEqual(capa["B9"].value, "160995206")
             self.assertEqual(capa["E9"].value, "R$ 359,96")
             self.assertEqual(capa["B18"].value, "Conta referente ao pacote Claro Internet Empresa.")
-            self.assertEqual(capa["B7"].font.name, "Verdana")
-            self.assertEqual(capa["B7"].font.size, 13)
-            self.assertTrue(capa["B7"].font.bold)
+            modelo = openpyxl.load_workbook(os.path.join(PASTA_TEMPLATES, "Template_CLARO_MODENS.xlsx"))
+            self.assertEqual(capa["B7"].font.name, modelo["Capa"]["B7"].font.name)
+            self.assertEqual(capa["B7"].font.size, modelo["Capa"]["B7"].font.size)
 
             rateio = wb["Rateio"]
             self.assertEqual(rateio["B6"].value, "Claro S/A")
             self.assertEqual(rateio["E7"].value, "11/08/2026")
             self.assertEqual(rateio["H7"].value, 359.96)
             self.assertEqual(rateio["B27"].value, "Alexandre Siqueira Souza Costa")
-            self.assertEqual(rateio["B27"].font.name, rateio["A27"].font.name)
-            self.assertEqual(rateio["B27"].font.size, rateio["A27"].font.size)
+            self.assertEqual(rateio["B27"].font.name, modelo["Rateio"]["B27"].font.name)
+            self.assertEqual(rateio["B27"].font.size, modelo["Rateio"]["B27"].font.size)
             self.assertRegex(str(rateio["H27"].value), r"\d{2}/\d{2}/\d{4}")
+            with zipfile.ZipFile(resultado["excel"]) as pacote:
+                partes = pacote.namelist()
+            self.assertIn("xl/drawings/drawing1.xml", partes)
+            self.assertIn("xl/media/image1.jpeg", partes)
+            self.assertIn("xl/comments1.xml", partes)
+            self.assertNotIn("xl/calcChain.xml", partes)
+            modelo.close()
+            wb.close()
 
     def test_tasy_usa_template_padrao_sem_aba_de_rateio(self):
         with tempfile.TemporaryDirectory() as saida:

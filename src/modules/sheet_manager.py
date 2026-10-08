@@ -1,10 +1,9 @@
 import os
 import re
 import json
-from copy import copy
+import zipfile
 from datetime import datetime
 import openpyxl
-from openpyxl.styles import Font
 
 def sanitizar_nome(texto):
     """Remove caracteres inválidos para nomes de pastas e arquivos."""
@@ -114,29 +113,95 @@ def limpar_valor(valor_str):
     try: return float(v)
     except ValueError: return 0.0
 
-def escrever_celula(ws, coordenada, valor, aplicar_estilo=True):
-    fonte_destaque = Font(name='Verdana', size=13, bold=True)
-    for intervalo in ws.merged_cells.ranges:
-        if coordenada in intervalo:
-            celula_principal = ws.cell(row=intervalo.min_row, column=intervalo.min_col)
-            celula_principal.value = valor
-            
-            if aplicar_estilo:
-                for linha in range(intervalo.min_row, intervalo.max_row + 1):
-                    for coluna in range(intervalo.min_col, intervalo.max_col + 1):
-                        ws.cell(row=linha, column=coluna).font = fonte_destaque
-            return
-            
-    ws[coordenada].value = valor
-    if aplicar_estilo:
-        ws[coordenada].font = fonte_destaque
-
 def encontrar_linha_assinatura(ws):
     for linha in range(1, 150):
         valor_celula = str(ws[f'A{linha}'].value).strip()
         if "Elaborado por:" in valor_celula:
             return linha
     return 69
+
+def _ancora(ws, coordenada):
+    for intervalo in ws.merged_cells.ranges:
+        if coordenada in intervalo:
+            return ws.cell(intervalo.min_row, intervalo.min_col).coordinate
+    return coordenada
+
+def _mapa_abas(caminho_xlsx):
+    with zipfile.ZipFile(caminho_xlsx) as arquivo:
+        relacoes = arquivo.read("xl/_rels/workbook.xml.rels").decode("utf-8")
+        livro = arquivo.read("xl/workbook.xml").decode("utf-8")
+    destino_por_id = {}
+    for encontrado in re.finditer(r"<Relationship\b([^>]*)/>", relacoes):
+        atributos = dict(re.findall(r'([\w:]+)="([^"]*)"', encontrado.group(1)))
+        destino = atributos.get("Target", "")
+        if destino.startswith("worksheets/"):
+            destino_por_id[atributos["Id"]] = "xl/" + destino
+    abas = {}
+    for encontrado in re.finditer(r"<sheet\b([^>]*)/?>", livro):
+        atributos = dict(re.findall(r'([\w:]+)="([^"]*)"', encontrado.group(1)))
+        abas[atributos["name"]] = destino_por_id[atributos["r:id"]]
+    return abas
+
+def _escapar_xml(texto):
+    limpo = "".join(caractere for caractere in str(texto) if caractere in "\t\n\r" or ord(caractere) >= 32)
+    return limpo.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _xml_da_celula(referencia, estilo, valor):
+    atributo_estilo = f' s="{estilo}"' if estilo else ""
+    if isinstance(valor, float):
+        return f'<c r="{referencia}"{atributo_estilo}><v>{valor:.2f}</v></c>'
+    texto = _escapar_xml("" if valor is None else valor)
+    espaco = ' xml:space="preserve"' if texto[:1].isspace() or texto[-1:].isspace() else ""
+    return f'<c r="{referencia}"{atributo_estilo} t="inlineStr"><is><t{espaco}>{texto}</t></is></c>'
+
+def _substituir_celula(xml, referencia, valor):
+    padrao = re.compile(
+        r'<c r="' + re.escape(referencia) + r'"([^>]*?)(?:/>|>.*?</c>)',
+        re.S,
+    )
+    encontrado = padrao.search(xml)
+    if not encontrado:
+        raise ValueError(f"Célula {referencia} não existe na planilha.")
+    estilo = re.search(r'\ss="(\d+)"', encontrado.group(1))
+    novo = _xml_da_celula(referencia, estilo.group(1) if estilo else None, valor)
+    return xml[:encontrado.start()] + novo + xml[encontrado.end():]
+
+def _gravar_preservando_template(caminho_template, caminho_saida, valores_por_aba):
+    """Copia o template e troca só o valor das células.
+
+    O openpyxl regrava o arquivo inteiro e derruba desenhos, imagens e
+    comentários. O Excel fecha ao abrir esse arquivo.
+    """
+    with zipfile.ZipFile(caminho_template, "r") as origem:
+        folhas = {}
+        for nome_aba, valores in valores_por_aba.items():
+            xml = origem.read(nome_aba).decode("utf-8")
+            for referencia, valor in valores.items():
+                xml = _substituir_celula(xml, referencia, valor)
+            folhas[nome_aba] = xml.encode("utf-8")
+
+        relacoes = origem.read("xl/_rels/workbook.xml.rels").decode("utf-8")
+        tipos = origem.read("[Content_Types].xml").decode("utf-8")
+        if "xl/calcChain.xml" in origem.namelist():
+            relacoes = re.sub(r'<Relationship\b[^>]*Target="calcChain.xml"[^>]*/>', "", relacoes)
+            tipos = re.sub(r'<Override\b[^>]*PartName="/xl/calcChain.xml"[^>]*/>', "", tipos)
+
+        pasta_saida = os.path.dirname(os.path.abspath(caminho_saida))
+        if pasta_saida:
+            os.makedirs(pasta_saida, exist_ok=True)
+        with zipfile.ZipFile(caminho_saida, "w") as destino:
+            for item in origem.infolist():
+                if item.filename == "xl/calcChain.xml":
+                    continue
+                if item.filename in folhas:
+                    dados = folhas[item.filename]
+                elif item.filename == "xl/_rels/workbook.xml.rels":
+                    dados = relacoes.encode("utf-8")
+                elif item.filename == "[Content_Types].xml":
+                    dados = tipos.encode("utf-8")
+                else:
+                    dados = origem.read(item.filename)
+                destino.writestr(item, dados)
 
 def salvar_na_planilha(dados_json_string, pasta_templates, caminho_saida):
     dados = json.loads(dados_json_string)
@@ -153,33 +218,45 @@ def salvar_na_planilha(dados_json_string, pasta_templates, caminho_saida):
         raise FileNotFoundError(f"Ficheiro de template não encontrado: {caminho_template}")
 
     wb = openpyxl.load_workbook(caminho_template)
+    try:
+        return _preencher_e_gravar(wb, caminho_template, caminho_saida, dados, regras, valor_float, valor_formatado)
+    finally:
+        wb.close()
+
+def _preencher_e_gravar(wb, caminho_template, caminho_saida, dados, regras, valor_float, valor_formatado):
     ws_capa = wb.worksheets[0]
-    
+    abas = _mapa_abas(caminho_template)
+    alteracoes = {}
+
+    def registrar(ws, coordenada, valor):
+        caminho_aba = abas[ws.title]
+        alteracoes.setdefault(caminho_aba, {})[_ancora(ws, coordenada)] = valor
+
     agora = datetime.now()
     data_hoje = agora.strftime("%d/%m/%Y")
     meses = {1:"jan", 2:"fev", 3:"mar", 4:"abr", 5:"mai", 6:"jun", 7:"jul", 8:"ago", 9:"set", 10:"out", 11:"nov", 12:"dez"}
     competencia = f"{meses[agora.month]}/{str(agora.year)[-2:]}"
 
-    # Preenchimento da Capa (mantém o estilo padrão da Capa)
-    escrever_celula(ws_capa, 'B7', regras["nome_oficial"], True)
-    escrever_celula(ws_capa, 'G7', regras["contrato"], True)
-    escrever_celula(ws_capa, 'B9', dados.get("numero_nf", ""), True)
-    escrever_celula(ws_capa, 'D9', dados.get("data_vencimento", ""), True)
-    escrever_celula(ws_capa, 'E9', valor_formatado, True) 
-    escrever_celula(ws_capa, 'H9', valor_formatado, True)
-    escrever_celula(ws_capa, 'B18', regras["descricao"], True)
-    escrever_celula(ws_capa, 'J4', data_hoje, True)
-    escrever_celula(ws_capa, 'D31', competencia, True)
+    # Preenchimento da Capa, sem regravar o desenho e os comentários do template
+    registrar(ws_capa, 'B7', regras["nome_oficial"])
+    registrar(ws_capa, 'G7', regras["contrato"])
+    registrar(ws_capa, 'B9', dados.get("numero_nf", "") or "")
+    registrar(ws_capa, 'D9', dados.get("data_vencimento", "") or "")
+    registrar(ws_capa, 'E9', valor_formatado)
+    registrar(ws_capa, 'H9', valor_formatado)
+    registrar(ws_capa, 'B18', regras["descricao"])
+    registrar(ws_capa, 'J4', data_hoje)
+    registrar(ws_capa, 'D31', competencia)
     
     bol_sim, bol_nao = formatar_checkbox(regras["boleto"])
-    escrever_celula(ws_capa, 'B22', f"Boleto  {bol_sim}")
-    escrever_celula(ws_capa, 'D22', f"{bol_nao}  - Preencher os dados bancários")
+    registrar(ws_capa, 'B22', f"Boleto  {bol_sim}")
+    registrar(ws_capa, 'D22', f"{bol_nao}  - Preencher os dados bancários")
 
     val_sim, val_nao = formatar_checkbox(regras["valor_igual"])
-    escrever_celula(ws_capa, 'B33', f"Valor Faturado é Igual ao Contratado?      {val_sim}          {val_nao}")
+    registrar(ws_capa, 'B33', f"Valor Faturado é Igual ao Contratado?      {val_sim}          {val_nao}")
 
     vig_sim, vig_nao = formatar_checkbox(regras["contrato_vigente"])
-    escrever_celula(ws_capa, 'B34', f"Contrato e/ou Termo Aditivo Vigente?      {vig_sim}          {vig_nao}")
+    registrar(ws_capa, 'B34', f"Contrato e/ou Termo Aditivo Vigente?      {vig_sim}          {vig_nao}")
 
     aba_rateio_existe = any(aba.lower() == "rateio" for aba in wb.sheetnames)
 
@@ -191,41 +268,17 @@ def salvar_na_planilha(dados_json_string, pasta_templates, caminho_saida):
                 
         coords = regras["rateio_coords"]
         
-        # Preenchimento do cabeçalho do Rateio (preservando o padrão nativo do template)
-        escrever_celula(ws_rateio, coords["fornecedor"], regras["nome_oficial"], False)
-        escrever_celula(ws_rateio, coords["nf"], dados.get("numero_nf", ""), False)
+        registrar(ws_rateio, coords["fornecedor"], regras["nome_oficial"])
+        registrar(ws_rateio, coords["nf"], dados.get("numero_nf", "") or "")
         
-        data_emissao = dados.get("data_emissao") or dados.get("data_vencimento", "")
-        escrever_celula(ws_rateio, coords["emissao"], data_emissao, False)
+        data_emissao = dados.get("data_emissao") or dados.get("data_vencimento", "") or ""
+        registrar(ws_rateio, coords["emissao"], data_emissao)
+        registrar(ws_rateio, coords["valor"], valor_float)
+        registrar(ws_rateio, coords["periodo"], competencia)
         
-        escrever_celula(ws_rateio, coords["valor"], valor_float, False)
-        escrever_celula(ws_rateio, coords["periodo"], competencia, False)
-        
-        # --- PRESERVAÇÃO NATIVA DA LINHA DE ASSINATURA ---
         linha_assinatura = encontrar_linha_assinatura(ws_rateio)
-        
-        # 1. Escreve o Nome no campo B e HERDA a fonte original do rótulo A ("Elaborado por:")
-        celula_nome = ws_rateio[f'B{linha_assinatura}']
-        celula_nome.value = "Alexandre Siqueira Souza Costa"
-        if ws_rateio[f'A{linha_assinatura}'].font:
-            celula_nome.font = copy(ws_rateio[f'A{linha_assinatura}'].font)
+        registrar(ws_rateio, f'B{linha_assinatura}', "Alexandre Siqueira Souza Costa")
+        registrar(ws_rateio, f'H{linha_assinatura}', data_hoje)
 
-        # 2. Localiza a coluna da "Data:" e herda a fonte nativa para o valor da Data
-        coluna_data_rotulo = 'G'
-        for col in ['E', 'F', 'G']:
-            if "Data:" in str(ws_rateio[f'{col}{linha_assinatura}'].value):
-                coluna_data_rotulo = col
-                break
-                
-        celula_data = ws_rateio[f'H{linha_assinatura}']
-        celula_data.value = data_hoje
-        if ws_rateio[f'{coluna_data_rotulo}{linha_assinatura}'].font:
-            celula_data.font = copy(ws_rateio[f'{coluna_data_rotulo}{linha_assinatura}'].font)
-        
-    elif not regras["tem_rateio"] and aba_rateio_existe:
-        for aba in wb.sheetnames:
-            if aba.lower() == "rateio":
-                del wb[aba]
-
-    wb.save(caminho_saida)
+    _gravar_preservando_template(caminho_template, caminho_saida, alteracoes)
     return caminho_saida
