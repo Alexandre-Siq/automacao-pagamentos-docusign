@@ -15,6 +15,19 @@ if ROOT not in sys.path:
 from src.modules.batch_processor import processar_fatura
 from src.modules.extrator_pdf import analisar_texto_fatura, extrair_dados_pdf
 
+
+def _gravar_pdf_imagem(caminho, texto):
+    origem = pymupdf.open()
+    pagina = origem.new_page(width=595, height=842)
+    pagina.insert_textbox(pymupdf.Rect(36, 36, 560, 800), texto, fontsize=14)
+    pix = pagina.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+    origem.close()
+    saida = pymupdf.open()
+    pagina_img = saida.new_page(width=595, height=842)
+    pagina_img.insert_image(pagina_img.rect, pixmap=pix)
+    saida.save(caminho)
+    saida.close()
+
 PASTA_TEMPLATES = os.path.join(ROOT, "data", "templates")
 
 NFSE_INFOCOPPY = """
@@ -116,6 +129,18 @@ class TestAnaliseLocal(unittest.TestCase):
         self.assertEqual(dados["valor_total"], "24.654,98")
         self.assertIn("12340002465498", dados["linha_digitavel"])
 
+    def test_nfse_aceita_rotulo_com_espaco_e_rs_sem_cifrao(self):
+        texto = """
+        TASY
+        Numero da NFS e 2286
+        VALOR TOTAL DA NFS E RS 2.186,34
+        Vencimento 10/09/2026
+        """
+        dados = analisar_texto_fatura(texto)
+        self.assertEqual(dados["fornecedor_nome"], "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA")
+        self.assertEqual(dados["valor_total"], "2.186,34")
+        self.assertEqual(dados["numero_nf"], "2286")
+
     def test_data_pode_vir_antes_do_rotulo(self):
         texto = """
         VIVO
@@ -168,9 +193,73 @@ class TestAnaliseLocal(unittest.TestCase):
             documento.new_page()
             documento.save(caminho)
             documento.close()
-            with self.assertRaises(ValueError) as ctx:
-                extrair_dados_pdf(caminho)
-            self.assertIn("não tem texto", str(ctx.exception))
+            with patch("src.modules.extrator_pdf._texto_ocr", return_value=None) as ocr:
+                with self.assertRaises(ValueError) as ctx:
+                    extrair_dados_pdf(caminho)
+            ocr.assert_called_once_with(caminho)
+            mensagem = str(ctx.exception).lower()
+            self.assertIn("não tem texto", mensagem)
+            self.assertIn("imagem", mensagem)
+
+    def test_pdf_imagem_e_lido_por_ocr(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "NF tasy.pdf")
+            documento = pymupdf.open()
+            documento.new_page()
+            documento.save(caminho)
+            documento.close()
+            with patch("src.modules.extrator_pdf._texto_ocr", return_value=TASY) as ocr:
+                dados = json.loads(extrair_dados_pdf(caminho))
+            ocr.assert_called_once_with(caminho)
+            self.assertEqual(dados["fornecedor_nome"], "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA")
+            self.assertEqual(dados["valor_total"], "2.186,34")
+            self.assertEqual(dados["numero_nf"], "2286")
+
+    def test_nome_do_arquivo_completa_fornecedor_tasy(self):
+        texto = """
+        Numero da NFS-e 2286
+        Emissao 01/08/2026
+        Vencimento 10/09/2026
+        Valor dos serviços R$ 2.186,34
+        """
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "NF tasy.pdf")
+            documento = pymupdf.open()
+            documento.new_page()
+            documento.save(caminho)
+            documento.close()
+            with patch("src.modules.extrator_pdf._texto_ocr", return_value=texto):
+                dados = json.loads(extrair_dados_pdf(caminho))
+            self.assertEqual(dados["fornecedor_nome"], "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA")
+            self.assertEqual(dados["valor_total"], "2.186,34")
+
+    def test_pdf_digital_nao_dispara_ocr(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "claro.pdf")
+            documento = pymupdf.open()
+            pagina = documento.new_page()
+            pagina.insert_textbox(pymupdf.Rect(36, 36, 560, 800), CLARO, fontsize=12)
+            documento.save(caminho)
+            documento.close()
+            with patch("src.modules.extrator_pdf._texto_ocr") as ocr:
+                dados = json.loads(extrair_dados_pdf(caminho))
+            ocr.assert_not_called()
+            self.assertEqual(dados["fornecedor_nome"], "Claro S/A")
+            self.assertEqual(dados["valor_total"], "359,96")
+
+    def test_texto_incompleto_ainda_tenta_ocr(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "incompleto.pdf")
+            documento = pymupdf.open()
+            pagina = documento.new_page()
+            pagina.insert_text((72, 72), "Apenas um aviso interno sem valor.")
+            documento.save(caminho)
+            documento.close()
+            with patch("src.modules.extrator_pdf._texto_ocr", return_value=TASY) as ocr:
+                dados = json.loads(extrair_dados_pdf(caminho))
+            ocr.assert_called_once_with(caminho)
+            self.assertEqual(dados["valor_total"], "2.186,34")
+            self.assertEqual(dados["fornecedor_nome"], "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA")
 
     def test_texto_incompleto_explica_o_que_faltou(self):
         with tempfile.TemporaryDirectory() as pasta:
@@ -180,9 +269,23 @@ class TestAnaliseLocal(unittest.TestCase):
             pagina.insert_text((72, 72), "Apenas um aviso interno sem valor.")
             documento.save(caminho)
             documento.close()
-            with self.assertRaises(ValueError) as ctx:
-                extrair_dados_pdf(caminho)
+            with patch("src.modules.extrator_pdf._texto_ocr", return_value=None):
+                with self.assertRaises(ValueError) as ctx:
+                    extrair_dados_pdf(caminho)
             self.assertIn("fornecedor", str(ctx.exception))
+
+    def test_ocr_real_le_nfse_tasy_em_imagem(self):
+        try:
+            from rapidocr import RapidOCR  # noqa: F401
+        except Exception:
+            self.skipTest("rapidocr não está instalado")
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "NF tasy.pdf")
+            _gravar_pdf_imagem(caminho, TASY)
+            dados = json.loads(extrair_dados_pdf(caminho))
+            self.assertEqual(dados["fornecedor_nome"], "TUCANO DO BRASIL SISTEMAS DE INFORMACAO LTDA")
+            self.assertEqual(dados["valor_total"], "2.186,34")
+            self.assertEqual(dados["numero_nf"], "2286")
 
     def test_arquivo_ausente(self):
         with self.assertRaises(FileNotFoundError):

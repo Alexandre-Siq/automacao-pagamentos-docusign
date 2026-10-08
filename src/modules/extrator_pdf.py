@@ -16,7 +16,7 @@ CAMPOS = (
 
 # Nomes oficiais já reconhecidos pelas regras da planilha.
 FORNECEDORES = (
-    (r"\bINFOCOPPY\b", "INFOCOPPY"),
+    (r"\bINFOCOPP?Y\b", "INFOCOPPY"),
     (r"SOUZA\s*(?:&|E)\s*SANTANA", "Souza & Santana Suprimentos e Soluções Técnicas Ltda – ME"),
     (r"\bPCTEC\b", "PCTEC OUTSOURCING LTDA"),
     (r"\bWTT\b", "WTT TECNOLOGIA E CONSULTORIA"),
@@ -35,35 +35,42 @@ ROTULOS_VALOR = (
     r"VALOR\s+DO\s+DOCUMENTO",
     r"VALOR\s+COBRADO",
     r"TOTAL\s+A\s+PAGAR",
+    r"VALOR\s+A\s+PAGAR",
     r"VALOR\s+TOTAL\s+DA\s+NOTA",
     r"VALOR\s+TOTAL\s+DO\s+SERVICO",
     r"VALOR\s+TOTAL\s+DOS\s+SERVICOS",
-    r"VALOR\s+TOTAL\s+DA\s+NFS-?E",
+    r"VALOR\s+TOTAL\s+DA\s+NFS[-\s]?E",
     r"VALOR\s+TOTAL\s+DA\s+FATURA",
     r"VALOR\s+LIQUIDO\s+DA\s+NOTA",
+    r"VALOR\s+LIQUIDO\s+A\s+PAGAR",
     r"VALOR\s+LIQUIDO",
     r"VALOR\s+DOS\s+SERVICOS",
+    r"VALOR\s+DO\s+SERVICO",
+    r"TOTAL\s+DA\s+NFS[-\s]?E",
+    r"TOTAL\s+DA\s+NOTA",
     r"VALOR\s+TOTAL",
 )
 
 ROTULOS_NUMERO = (
     r"NUMERO\s+DA\s+NOTA(?:\s+FISCAL)?",
-    r"NUMERO\s+DA\s+NFS-?E",
-    r"NUMERO\s+DA\s+NF-?E",
+    r"NUMERO\s+DA\s+NFS[-\s]?E",
+    r"NUMERO\s+DA\s+NF[-\s]?E",
     r"NUMERO\s+DA\s+FATURA",
     r"N(?:O|\.)?\s+DA\s+NOTA(?:\s+FISCAL)?",
     r"N(?:O|\.)?\s+DA\s+FATURA",
     r"N(?:O|\.)?\s+FATURA",
-    r"NFS-?E\s+N(?:O|\.)?",
-    r"NF-?E\s+N(?:O|\.)?",
+    r"NFS[-\s]?E\s+N(?:O|\.|UMERO)?",
+    r"NF[-\s]?E\s+N(?:O|\.|UMERO)?",
     r"NOTA\s+FISCAL\s+N(?:O|\.)?",
     r"FATURA\s+N(?:O|\.)?",
 )
 
+_ocr_engine = None
+
 CNPJ_RE = re.compile(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}")
 DATA_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](\d{4})\b")
 DINHEIRO_RE = re.compile(
-    r"R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})"
+    r"(?:R\$|RS)\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})"
     r"|"
     r"(?<!\d)(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})(?!\d)"
 )
@@ -77,15 +84,12 @@ LINHA_ARRECADACAO_RE = re.compile(
 
 
 def extrair_texto_pdf_local(caminho_pdf):
-    """Lê a camada de texto do PDF. Sem texto, o arquivo é imagem e não entra na fila de API."""
-    textos = []
-    for leitor in (_texto_pypdf, _texto_pymupdf):
-        try:
-            texto = leitor(caminho_pdf)
-        except Exception:
-            texto = None
-        if texto and texto.strip():
-            textos.append(texto.strip())
+    """Lê o PDF no computador: texto selecionável primeiro, imagem em seguida."""
+    textos = list(_textos_digitais(caminho_pdf))
+    if not textos:
+        ocr = _texto_ocr(caminho_pdf)
+        if ocr:
+            textos.append(ocr)
     if not textos:
         return None
     return max(textos, key=len)
@@ -98,25 +102,30 @@ def extrair_dados_pdf(caminho_pdf):
 
     print("-> Lendo a fatura localmente, sem enviar ao Gemini...")
     candidatos = []
-    for leitor in (_texto_pypdf, _texto_pymupdf):
-        try:
-            texto = leitor(caminho_pdf)
-        except Exception:
-            texto = None
-        if not texto or not texto.strip():
-            continue
-        dados = analisar_texto_fatura(texto)
-        candidatos.append(dados)
+    for texto in _textos_digitais(caminho_pdf):
+        candidatos.append(analisar_texto_fatura(texto))
+
+    melhor = max(candidatos, key=_pontuacao) if candidatos else {}
+    if not _completo(melhor):
+        print("-> Sem texto selecionável útil. Lendo a imagem do PDF no computador...")
+        texto_ocr = _texto_ocr(caminho_pdf)
+        if texto_ocr:
+            candidatos.append(analisar_texto_fatura(texto_ocr))
 
     if not candidatos:
         raise ValueError(
-            "O PDF não tem texto selecionável. A leitura local não envia o arquivo ao Gemini."
+            "O PDF não tem texto selecionável e a leitura da imagem também não "
+            "encontrou conteúdo. Use um PDF mais nítido, gerado pelo sistema."
         )
+
+    dicas = _dicas_arquivo(caminho_pdf)
+    for dados in candidatos:
+        _completar_com_dicas(dados, dicas)
 
     dados = max(candidatos, key=_pontuacao)
     if not dados.get("fornecedor_nome") or not dados.get("valor_total"):
         raise ValueError(
-            "Não foi possível identificar o fornecedor e o valor no texto do PDF. "
+            "Não foi possível identificar o fornecedor e o valor no PDF. "
             f"Encontrado: fornecedor={dados.get('fornecedor_nome') or '—'}, "
             f"valor={dados.get('valor_total') or '—'}, "
             f"nf={dados.get('numero_nf') or '—'}."
@@ -168,6 +177,22 @@ def _pontuacao(dados):
     return sum(pesos[campo] for campo in CAMPOS if dados.get(campo))
 
 
+def _completo(dados):
+    return bool(dados.get("fornecedor_nome") and dados.get("valor_total"))
+
+
+def _textos_digitais(caminho_pdf):
+    textos = []
+    for leitor in (_texto_pypdf, _texto_pymupdf):
+        try:
+            texto = leitor(caminho_pdf)
+        except Exception:
+            texto = None
+        if texto and texto.strip():
+            textos.append(texto.strip())
+    return textos
+
+
 def _texto_pypdf(caminho_pdf):
     import pypdf
 
@@ -185,9 +210,137 @@ def _texto_pymupdf(caminho_pdf):
 
     documento = pymupdf.open(caminho_pdf)
     try:
-        return "\n".join(pagina.get_text("text") for pagina in documento)
+        partes = []
+        for pagina in documento:
+            texto = pagina.get_text("text") or ""
+            if not texto.strip():
+                palavras = pagina.get_text("words") or []
+                texto = " ".join(item[4] for item in palavras)
+            partes.append(texto)
+        return "\n".join(partes)
     finally:
         documento.close()
+
+
+def _obter_ocr():
+    global _ocr_engine
+    if _ocr_engine is False:
+        return None
+    if _ocr_engine is not None:
+        return _ocr_engine
+    try:
+        from rapidocr import RapidOCR
+
+        _ocr_engine = RapidOCR()
+        return _ocr_engine
+    except Exception as erro:
+        print(f"   [Aviso] OCR indisponível: {erro}")
+        _ocr_engine = False
+        return None
+
+
+def _texto_ocr(caminho_pdf):
+    """Rasteriza as páginas e lê a imagem no computador, sem enviar o arquivo."""
+    engine = _obter_ocr()
+    if engine is None:
+        return None
+    import pymupdf
+
+    documento = pymupdf.open(caminho_pdf)
+    partes = []
+    try:
+        for indice, pagina in enumerate(documento):
+            if indice >= 4:
+                break
+            maior = max(pagina.rect.width, pagina.rect.height) or 1
+            zoom = 2.0 if maior <= 1600 else 1600 / maior
+            pix = pagina.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+            try:
+                resultado = engine(pix.tobytes("png"))
+            except Exception as erro:
+                print(f"   [Aviso] Falha no OCR da página {indice + 1}: {erro}")
+                continue
+            texto = _texto_do_ocr(resultado)
+            if texto:
+                partes.append(texto)
+    finally:
+        documento.close()
+    texto = "\n".join(partes).strip()
+    return texto or None
+
+
+def _texto_do_ocr(resultado):
+    if resultado is None:
+        return ""
+    txts = getattr(resultado, "txts", None)
+    boxes = getattr(resultado, "boxes", None)
+    if txts:
+        linhas = []
+        for indice, txt in enumerate(txts):
+            box = boxes[indice] if boxes is not None else None
+            y, x = _origem_caixa(box, indice)
+            linhas.append((y, x, str(txt)))
+        return _juntar_linhas(ocr_linhas=linhas)
+    if isinstance(resultado, (tuple, list)) and resultado and resultado[0]:
+        linhas = []
+        for indice, item in enumerate(resultado[0]):
+            box = item[0] if isinstance(item, (list, tuple)) else None
+            txt = item[1] if isinstance(item, (list, tuple)) and len(item) > 1 else ""
+            y, x = _origem_caixa(box, indice)
+            linhas.append((y, x, str(txt)))
+        return _juntar_linhas(ocr_linhas=linhas)
+    return ""
+
+
+def _origem_caixa(box, indice):
+    try:
+        ponto = box[0]
+        return float(ponto[1]), float(ponto[0])
+    except (TypeError, IndexError, ValueError):
+        return float(indice), 0.0
+
+
+def _juntar_linhas(ocr_linhas):
+    if not ocr_linhas:
+        return ""
+    ocr_linhas = sorted(ocr_linhas, key=lambda item: (item[0], item[1]))
+    grupos = []
+    for y, x, txt in ocr_linhas:
+        if not txt or not str(txt).strip():
+            continue
+        if not grupos or abs(y - grupos[-1][0][0]) > 14:
+            grupos.append([(y, x, str(txt).strip())])
+        else:
+            grupos[-1].append((y, x, str(txt).strip()))
+    saidas = []
+    for grupo in grupos:
+        grupo.sort(key=lambda item: item[1])
+        saidas.append(" ".join(item[2] for item in grupo))
+    return "\n".join(saidas)
+
+
+def _dicas_arquivo(caminho_pdf):
+    """Nome do arquivo ajuda quando a imagem só entrega parte dos dados."""
+    nome = os.path.splitext(os.path.basename(caminho_pdf or ""))[0]
+    busca = _normalizar(re.sub(r"[_\-]+", " ", nome))
+    dicas = {}
+    for padrao, fornecedor in FORNECEDORES:
+        if re.search(padrao, busca):
+            dicas["fornecedor_nome"] = fornecedor
+            break
+    if re.search(r"\bNFS?\s*E\b|\bNF\b", busca):
+        numeros = re.findall(r"\d{3,12}", nome)
+        if numeros:
+            escolhido = max(numeros, key=len).lstrip("0") or numeros[0]
+            dicas["numero_nf"] = escolhido
+    return dicas
+
+
+def _completar_com_dicas(dados, dicas):
+    for campo, valor in (dicas or {}).items():
+        if valor and not dados.get(campo):
+            dados[campo] = valor
+    return dados
 
 
 def _formatar_cnpj(bruto):
